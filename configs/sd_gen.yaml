@@ -1,0 +1,66 @@
+defaults:
+  - _self_
+
+hydra:
+  run:
+    # dir: ${exp_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: ${exp_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${exp_dir}/${hydra.job.name}  
+    #subdir: ${exp_dir}/${hydra.job.num}/seed=${seed}
+    subdir: /tmp/${hydra.job.override_dirname}/seed=${seed}
+  job:
+    env_set:
+      CUDA_VISIBLE_DEVICES: ${plus:${hydra.job.num},0}
+    config:
+      override_dirname:
+        exclude_keys:
+          - exp_dir
+          - seed
+          - wandb
+          - model_path
+          - exp_name
+          - loop.training_steps
+          - loop.finetune_steps
+    chdir: true
+
+
+
+prompt: A creative architecture. # the prompt we are sampling for
+#model_path: /local/home/mvlastelica/stable_diffusion_diversity3/stable_diffusion_exp/trainer.lmbda=0.001,trainer.lr=1e-07,trainer.sample_jumps=True,trainer.traj_len=30,trainer.traj_samples_per_stage=3/seed=0
+# model_path: /local/home/mvlastelica/stable_diffusion_diversity_arch/2025-01-30/15-40-37/
+# model_path: /local/home/mvlastelica/stable_diffusion_diversity_prompt/stable_diffusion_exp/prompt=an\ innovative\ car\ design/seed=0
+model_path: /local/home/mvlastelica/stable_diffusion_diversity_prompt_1.0/2025-03-29/16-28-05
+
+
+# model_path: null
+num_imgs: 100 # something is wrong here, in the end we get 3k images
+num_imgs_per_seed: 10
+model_name: base_model
+exp_dir: ${model_path}/${model_name}_model/images
+seed: 0
+store_features: true
+
+
+image_sampler:
+  _target_: maxentdiff.sd_utils.sample_imgs
+  _partial_: true # needed to instantiate the function
+  num_imgs: ${num_imgs_per_seed}
+  prompt: ${prompt}
+  steps: 30
+
+model:
+  _target_: maxentdiff.models.StableDiffusion
+  device: cuda
+  guidance_scale: 8
+  requires_safety_checker: false
+
+wandb:
+  project: maxentdiff_sd_sampling
+  tags: [rebuttal]
+  name: ${hydra:job.override_dirname}/stable-sampling-${model_name}-vendi
+  entity: mvlast
+  resume: auto
+  # group: ${hydra:job.override_dirname}
+  
+

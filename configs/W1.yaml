@@ -1,0 +1,64 @@
+defaults:
+  - _self_
+
+now: &now ${now:%Y-%m-%d-%H:%M:%S}
+
+hydra:
+  run:
+    dir: /tmp/test/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${exp_dir}/${hydra.job.name}  
+    # subdir: ${exp_dir}/${hydra.job.num}/seed=${seed}
+    # subdir: ${hydra.job.override_dirname}/seed=${seed}
+    # subdir: ${hydra.job.override_dirname}-${hydra.job.num}/seed=${seed}
+  job:
+    config:
+      override_dirname:
+        exclude_keys:
+          - exp_dir
+          - seed
+          - wandb.*
+          - model_path
+          - exp_name
+          - loop.*
+    chdir: true
+
+
+exp_dir: ${oc.env:SCRATCH}/${oc.env:USER}/fdc_neurips2025/w1_toy/${now} # this is the directory where the experiment will be saved
+seed: 0
+
+model_path: /home/${oc.env:USER}/projects/max-entropy-diff/models/model_gaussian_circle.pth # this is the path pretrained model checkpoint (override this via command line)
+
+trainer: #TODO replace this with CVar, Wasserstein etc. (separate config for each)
+  _target_: maxentdiff.trainers.wasserstein1_functional.Wasserstein1Trainer # this is python path to trainer
+  lr: 1.e-6
+  traj_samples_per_stage: 400
+  data_shape: [2]
+  batch_size: 1024
+  traj_len: 1000
+  lmbda: 40
+  finetune_steps: 100 #150
+  clip_grad_norm: 1.0
+  num_traj_MC: 2048
+  critic_steps: 2000
+  gp_lambda: 0.01
+  critic_lr: 5.e-3
+  alpha_div: 10.0 # set alpha_div
+
+distance_param_K: 7.0
+  # task: 'entropy_KL' # for wandb filtering
+
+wandb: #TODO adjust your wandb settings
+  project: fdc-neurips
+  tags: [W1]
+  name: ${hydra:job.override_dirname}/${now:%m-%d-%H-%M-%S}
+  entity: riccardodesanti
+  # group: ${hydra:job.override_dirname}
+  
+loop:
+  md_steps: 4
+  training_steps: 40
+  log_freq: 10
+
+
+  

@@ -1,0 +1,26 @@
+defaults:
+  - _self_
+  - sd_defaults
+
+exp_dir: /tmp/${oc.env:USER}/fdc_neurips2025/stable_diffusion_ent_kl/${now:%Y-%m-%d}/${now:%H-%M-%S} # this is the directory where the experiment will be saved
+
+hydra:
+  run:
+    # dir: ${exp_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: ${exp_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${exp_dir}/${hydra.job.name}/${now:%m-%d-%H:%M:%S}
+  job:
+    # env_set:
+    #   CUDA_VISIBLE_DEVICES: ${cuda_device}
+    config:
+      override_dirname:
+        exclude_keys:
+          - exp_dir
+          - seed
+          - wandb
+          - model_path
+          - exp_name
+          - loop.training_steps
+          - loop.finetune_steps
+    chdir: true

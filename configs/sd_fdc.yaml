@@ -1,0 +1,87 @@
+defaults:
+  - _self_
+
+now: &now ${now:%m-%d-%H:%M:%S}
+
+hydra:
+  run:
+    # dir: ${exp_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: ${exp_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${exp_dir}/${hydra.job.name}  
+    #subdir: ${exp_dir}/${hydra.job.num}/seed=${seed}
+    # subdir: ${hydra.job.override_dirname}/seed=${seed}
+  job:
+    env_set:
+      CUDA_VISIBLE_DEVICES: ${hydra.job.num}
+    config:
+      override_dirname:
+        exclude_keys:
+          - exp_dir
+          - seed
+          - wandb
+          - model_path
+          - exp_name
+          - loop.training_steps
+          - loop.finetune_steps
+    chdir: true
+
+
+prompt: "A mystic river flowing through a mountain." # the prompt we are fine-tuning for
+# prompt: "A creative fantasy landscape." # the prompt we are fine-tuning for
+exp_dir: /tmp/mvlastelica/fdc_neurips2025/${now}
+cuda_device: 3
+store_model: true
+seed: 0
+
+model:
+  _target_: maxentdiff.models.StableDiffusion
+  device: cuda
+  guidance_scale: 8
+  dtype: float32
+
+diversity_evaluator:
+  _target_: maxentdiff.sd_utils.CLIPInceptionDiversityEval
+  model: ViT-B-32
+  pretrained: laion2b_s34b_b79k
+  rbf_gamma: 5.0
+
+
+image_sampler:
+  _target_: maxentdiff.sd_utils.ImageSampler
+  num_images: [3,6]
+  steps: 30
+  guidance_scale: 8
+  seed: 0
+  prompt: ${prompt}
+
+wandb:
+  project: neurips-fdc-stable-diffusion
+  tags: [SD-v1]
+  name: ${prompt}/${hydra:job.override_dirname}/stable-diffusion/seed=${seed}-alpha=${trainer.alpha_div}-${now:%Y-%m-%d}
+  entity: mvlast
+  resume: auto
+  
+
+trainer:
+  _target_: maxentdiff.trainers.max_ent_KL_reg.MaxEntKLRegTrainer
+  alpha_div: 0.1 # alpha for divergence loss
+  lr: 1.e-6
+  traj_samples_per_stage: 5
+  data_shape: [16384] # 4x64x64
+  batch_size: 8
+  traj_len: 30
+  lmbda: 0.01 # 0.01
+  finetune_steps:  10
+  clip_grad_norm: 1.0
+  sample_jumps: true # sample jumps in the diffusion process
+  epsilon: 5.e-4
+
+loop:
+  md_steps:  20
+  save_every: 5
+  training_steps: 1000
+  log_freq: 5
+
+
+  

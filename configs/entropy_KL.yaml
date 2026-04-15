@@ -1,0 +1,60 @@
+defaults:
+  - _self_
+
+now: &now ${now:%Y-%m-%d-%H:%M:%S}
+
+hydra:
+  run:
+    dir: /tmp/test/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${exp_dir}/${hydra.job.name}  
+    # subdir: ${exp_dir}/${hydra.job.num}/seed=${seed}
+    # subdir: ${hydra.job.override_dirname}/seed=${seed}
+    # subdir: ${hydra.job.override_dirname}-${hydra.job.num}/seed=${seed}
+  job:
+    config:
+      override_dirname:
+        exclude_keys:
+          - exp_dir
+          - seed
+          - wandb
+          - model_path
+          - exp_name
+          - loop.*
+    chdir: true
+
+
+
+exp_dir: ${oc.env:SCRATCH}/${oc.env:USER}/fdc_neurips2025/ent_kl_toy/${now} # this is the directory where the experiment will be saved
+seed: 0
+
+model_path: /home/${oc.env:USER}/projects/max-entropy-diff/models/unbalanced_ellipses.pth # this is the path pretrained model checkpoint (override this via command line)
+
+trainer: #TODO replace this with CVar, Wasserstein etc. (separate config for each)
+  _target_: maxentdiff.trainers.max_ent_KL_reg.MaxEntKLRegTrainer # this is python path to trainer
+  lr: 1.e-5
+  traj_samples_per_stage: 10
+  data_shape: [2]
+  batch_size: 2048
+  traj_len: 400
+  lmbda: 1.0
+  finetune_steps: 2
+  clip_grad_norm: 1.0
+  epsilon: 4.e-4
+  
+  # task: 'entropy_KL' # for wandb filtering
+
+wandb: #TODO adjust your wandb settings
+  project: fdc-neurips
+  tags: [entropy-KL]
+  name: seed=${seed}-alpha=${trainer.alpha_div}-lmbda=${trainer.lmbda}-epsilon=${trainer.epsilon}/${now:%Y-%m-%d}
+  entity: riccardodesanti
+  # group: ${hydra:job.override_dirname}
+  
+loop:
+  md_steps: 4
+  training_steps: 40
+  log_freq: 10
+
+
+  

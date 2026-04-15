@@ -1,0 +1,18 @@
+submitit_folder: ${hydra.sweep.dir}/.submitit/%j
+timeout_min: 60
+cpus_per_task: 4
+# tasks_per_node: 1
+mem_gb: null
+# nodes: 1
+name: ${hydra.job.name}
+_target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
+mem_per_cpu: 20240
+# gres:  gpus
+#gpus: a100-pcie-40gb:1
+
+account: ls_krausea
+additional_parameters: {"gpus": "a100-pcie-40gb:1"}
+array_parallelism: 256
+max_num_timeout: 100
+setup:
+  - '#SBATCH --requeue'
