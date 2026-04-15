@@ -46,7 +46,26 @@ If you use this code in your research, please include the following citation in 
 	author={De Santi*, Riccardo and Protopapas*, Kimon and Hsieh, Ya-Ping and Krause, Andreas},
 	booktitle={International Conference on Learning Representations (ICLR)},
 	year={2026},
-	month={April},
 	pdf={https://arxiv.org/pdf/2602.15984},
+}
+```
+
+References for verifier-free flow expansion methods:
+
+```
+@inproceedings{de2025flow,
+ 	author = {De Santi, Riccardo and Vlastelica, Marin and Hsieh, Ya-Ping and Shen, Zebang and He, Niao and Krause, Andreas},
+ 	booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+ 	pdf = {https://www.arxiv.org/abs/2511.22640},
+ 	title = {Flow Density Control: Generative Optimization Beyond Entropy-Regularized Fine-Tuning},
+ 	year = {2025}
+}
+
+@inproceedings{de2025provable,
+	author = {De Santi*, Riccardo and Vlastelica*, Marin and Hsieh, Ya-Ping and Shen, Zebang and He, Niao and Krause, Andreas},
+	booktitle = {Proc. International Conference on Machine Learning (ICML)},
+	pdf = {https://arxiv.org/pdf/2506.15385},
+	title = {Provable Maximum Entropy Manifold Exploration via Diffusion Models},
+	year = {2025}
 }
 ```
