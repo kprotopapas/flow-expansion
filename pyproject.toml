@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "genexp"
+version = "0.1.0"
+description = "A package for Generative Exploration functionality"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "diffusiongym",
+    "hydra-core",
+    "lightning",
+    "matplotlib",
+    "numpy",
+    "omegaconf",
+    "pytorch-fid",
+    "scikit-learn",
+    "scipy",
+    "torch==2.3.*",
+    "torchdiffeq",
+    "torchvision",
+    "tqdm",
+    "wandb",
+    "flowmol @ git+https://github.com/cristianpjensen/FlowMol.git@8f4c98cbe68111e4e63480b250d925b6d960d3bc"
+]
+
+[project.optional-dependencies]
+sd = [
+    "diffusers[torch]",
+    "open-clip-torch",
+    "pillow",
+]
+mol = [
+    "dgl",
+    "flowmol",
+]
+
+[tool.uv]
+find-links = [
+    "https://data.dgl.ai/wheels/torch-2.3/cu121/repo.html",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel",
+    "jupyter",
+    "jupyterlab",
+    "pytest",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/genexp"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+triton = { index = "pytorch-cu121" }
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
