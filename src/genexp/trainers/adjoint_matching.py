@@ -158,7 +158,7 @@ def create_timestep_subset(total_steps, final_percent=0.25, sample_percent=0.25)
 def adj_matching_loss(v_base, v_fine, adj, sigma) -> torch.Tensor:
     """Adjoint matching loss for a single timestep batch (D-typed inputs)."""
     diff = v_fine - v_base
-    term_diff = (2 / sigma) * diff
+    term_diff = (diff / sigma) * 2
     term_adj = sigma * adj
     term_difference = term_diff - term_adj
     return (term_difference ** 2).aggregate("sum").mean()
