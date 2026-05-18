@@ -1,6 +1,7 @@
-from omegaconf import OmegaConf
+from omegaconf import DictConfig
 from diffusiongym.base_models import BaseModel
 from diffusiongym.environments import Environment
+from diffusiongym.types import D
 from genexp.trainers.adjoint_matching import AMTrainerFlow
 from typing import Callable, Optional
 
@@ -8,19 +9,37 @@ import torch
 import copy
 
 
-def _score_func(model: BaseModel, x, t: torch.Tensor):
+def _score_func(model: BaseModel[D], x: D, t: torch.Tensor) -> D:
     """Compute the score function ∇log p_t(x) from a velocity-predicting model."""
-    v = model.forward(x, t)
-    scheduler = model.scheduler
-    kappa = scheduler.kappa(x, t)   # α_dot / α
-    eta = scheduler.eta(x, t)       # β(κβ - β_dot)
-    return (v - kappa * x) / eta
+    if model.output_type == "score":
+        return model.forward(x, t)
+    
+    elif model.output_type == "velocity":
+        v = model.forward(x, t)
+        scheduler = model.scheduler
+        kappa = scheduler.kappa(x, t)   # α_dot / α
+        eta = scheduler.eta(x, t)       # β(κβ - β_dot)
+        return (v - kappa * x) / eta
+
+    elif model.output_type == "endpoint":
+        x_1 = model.forward(x, t)
+        scheduler = model.scheduler
+        alpha = scheduler.alpha(x, t)
+        beta = scheduler.beta(x, t)
+        return (alpha * x_1 - x) / (beta ** 2)
+
+    elif model.output_type == "epsilon":
+        eps = model.forward(x, t)
+        beta = model.scheduler.beta(x, t)
+        return -eps / beta
+
+    raise ValueError("Incorrectly specified base model")
 
 
 class FlowExpansionTrainer(AMTrainerFlow):
     def __init__(
         self,
-        config: OmegaConf,
+        config: DictConfig,
         env: Environment,
         model: BaseModel,
         base_model: BaseModel,
@@ -35,7 +54,7 @@ class FlowExpansionTrainer(AMTrainerFlow):
         if device is not None:
             self.epsilon = self.epsilon.to(device)
 
-        self.grad_constraint = grad_constraint
+        self.grad_constraint: Optional[Callable] = grad_constraint
         self.traj: bool = config.traj
         self.base_base_model = copy.deepcopy(base_model)
 
@@ -60,7 +79,6 @@ class FlowExpansionTrainer(AMTrainerFlow):
     def _make_fns(self, base_model, base_base_model):
         eps = float(self.epsilon)
         gamma = self.gamma
-        beta = self.beta
 
         def grad_reward_fn(x):
             t = torch.full((len(x),), 1.0 - eps, device=x.device)
@@ -82,9 +100,12 @@ class FlowExpansionTrainer(AMTrainerFlow):
 
     def project(self):
         """Switch to the constraint-gradient reward (projection step)."""
+        if self.grad_constraint is None:
+            raise ValueError('Projection step with no grad_constraint set')
+        
+        grad_constraint: Callable = self.grad_constraint
         eta = self.eta_coeff
-        constraint = self.grad_constraint
-        self.grad_reward_fn = lambda x: eta * constraint(x)
+        self.grad_reward_fn = lambda x: eta * grad_constraint(x)
         self.grad_f_k_fn = None
 
     def update_base_model(self):

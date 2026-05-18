@@ -175,12 +175,12 @@ def test_sampler_no_nans():
 
 @pytest.fixture
 def fe_trainer():
-    device = torch.device("cpu")
+    device = "cpu"
     base_model = make_velocity_model(device)
     fine_model = copy.deepcopy(base_model)
     env = make_env(base_model)
     config = make_fe_config()
-    return FlowExpansionTrainer(config, env, fine_model, base_model, device=device)
+    return FlowExpansionTrainer(config, env, fine_model, base_model, device=torch.device(device))
 
 
 def test_trainer_init(fe_trainer):
@@ -219,7 +219,7 @@ def test_trainer_update_base_model(fe_trainer):
 
 def test_full_tutorial_loop():
     device = torch.device("cpu")
-    base_model = make_velocity_model(device)
+    base_model = make_velocity_model("cpu")
     fine_model = copy.deepcopy(base_model)
     env = make_env(base_model)
     config = make_fe_config()

@@ -14,7 +14,6 @@ dependencies = [
     "matplotlib",
     "numpy",
     "omegaconf",
-    "pytorch-fid",
     "scikit-learn",
     "scipy",
     "torch==2.3.*",
@@ -30,6 +29,7 @@ sd = [
     "diffusers[torch]",
     "open-clip-torch",
     "pillow",
+    "pytorch-fid",
 ]
 mol = [
     "dgl",

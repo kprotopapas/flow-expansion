@@ -1,5 +1,5 @@
 import numpy as np
-from omegaconf import OmegaConf
+from omegaconf import DictConfig
 from typing import Callable, Optional
 
 import torch
@@ -7,6 +7,41 @@ from torch.utils.data import Dataset, ConcatDataset
 
 from diffusiongym.base_models import BaseModel
 from diffusiongym.environments import Environment
+from diffusiongym.types import D
+
+
+def _velocity(model: BaseModel[D], x: D, t: torch.Tensor) -> D:
+    """Compute the velocity field for a general model."""
+    if model.output_type == "score":
+        s = model.forward(x, t)
+
+        scheduler = model.scheduler
+        kappa = scheduler.kappa(x, t)
+        eta = scheduler.eta(x, t)
+
+        return s * eta + kappa * x
+    
+    elif model.output_type == "velocity":
+        return model.forward(x, t)
+
+    elif model.output_type == "endpoint":
+        x_1 = model.forward(x, t)
+        scheduler = model.scheduler
+        kappa = scheduler.kappa(x, t)
+        eta = scheduler.eta(x, t)
+        alpha = scheduler.alpha(x, t)
+        beta = scheduler.beta(x, t)
+        return kappa * x + eta * (alpha * x_1 - x) / (beta ** 2)
+
+    elif model.output_type == "epsilon":
+        eps = model.forward(x, t)
+        scheduler = model.scheduler
+        kappa = scheduler.kappa(x, t)
+        eta = scheduler.eta(x, t)
+        beta = scheduler.beta(x, t)
+        return kappa * x - (eta / beta) * eps
+
+    raise ValueError("Incorrectly specified base model")
 
 
 class LeanAdjointSolverFlow:
@@ -36,7 +71,7 @@ class LeanAdjointSolverFlow:
 
         with torch.enable_grad():
             x_t_grad = x_t.detach().requires_grad(True)
-            v_pred = self.model.forward(x_t_grad, t)
+            v_pred = _velocity(self.model, x_t_grad, t)
 
             alpha = self.scheduler.alpha(x_t_grad, t)
             alpha_dot = self.scheduler.alpha_dot(x_t_grad, t)
@@ -128,11 +163,10 @@ def adj_matching_loss(v_base, v_fine, adj, sigma) -> torch.Tensor:
     term_difference = term_diff - term_adj
     return (term_difference ** 2).aggregate("sum").mean()
 
-
 class AMTrainerFlow:
     def __init__(
         self,
-        config: OmegaConf,
+        config: DictConfig,
         env: Environment,
         fine_model: BaseModel,
         base_model: BaseModel,
@@ -216,7 +250,7 @@ class AMTrainerFlow:
         for idx in idxs:
             n = len(traj_x[idx])
             t = ts[idx].unsqueeze(0).expand(n)
-            v_fine_t = self.fine_model.forward(traj_x[idx], t)
+            v_fine_t = _velocity(self.fine_model, traj_x[idx], t)
             loss_t = adj_matching_loss(traj_v_base[idx], v_fine_t, traj_adj[idx], traj_sigma[idx])
             losses.append(loss_t)
 
