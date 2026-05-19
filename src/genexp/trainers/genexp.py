@@ -4,6 +4,7 @@ from diffusiongym.environments import Environment
 from diffusiongym.types import D
 from genexp.trainers.adjoint_matching import AMTrainerFlow
 from typing import Callable, Optional
+from tqdm import tqdm
 
 import torch
 import copy
@@ -110,3 +111,41 @@ class FlowExpansionTrainer(AMTrainerFlow):
 
     def update_base_model(self):
         self.base_model.load_state_dict(self.fine_model.state_dict())
+
+    def fit(self, num_iterations: int, pbar: bool = False) -> list[float]:
+        """Run the full expand-project mirror-descent loop.
+
+        Each iteration:
+          1. expand()  — AM fine-tuning toward higher reward
+          2. project() — AM fine-tuning back toward the constraint set
+          3. update_base_model()
+
+        The number of AM rounds per step and gradient steps per round are
+        read from config.adjoint_matching.num_iterations and
+        config.adjoint_matching.finetune_steps respectively.
+
+        Returns a flat list of per-AM-round losses (expand losses first,
+        then project losses, for each mirror-descent iteration).
+        """
+        am_iters = self.config.get('num_iterations', 1)
+        finetune_steps = self.config.get('finetune_steps', None)
+        losses = []
+        
+        it = tqdm(range(num_iterations)) if pbar else range(num_iterations)
+
+        for _ in it:
+            self.expand()
+            for _ in range(am_iters):
+                dataset = self.generate_dataset()
+                losses.append(self.finetune(dataset, steps=finetune_steps))
+
+            if self.grad_constraint is not None and self.eta_coeff > 0:
+                self.project()
+                for _ in range(am_iters):
+                    dataset = self.generate_dataset()
+                    losses.append(self.finetune(dataset, steps=finetune_steps))
+
+            self.update_base_model()
+        
+
+        return losses

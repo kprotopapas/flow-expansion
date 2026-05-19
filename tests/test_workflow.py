@@ -237,3 +237,32 @@ def test_full_tutorial_loop():
         not torch.equal(v, initial_params[k])
         for k, v in trainer.fine_model.named_parameters()
     ), "model weights unchanged after finetuning"
+
+
+def test_fit():
+    device = torch.device("cpu")
+    base_model = make_velocity_model("cpu")
+    fine_model = copy.deepcopy(base_model)
+    env = make_env(base_model)
+
+    # Add num_iterations and finetune_steps so fit() can read them from config
+    config = make_fe_config()
+    config.adjoint_matching.num_iterations = 1
+    config.adjoint_matching.finetune_steps = 2
+
+    grad_constraint = lambda x: x  # dummy: ∇C(x) = x
+    trainer = FlowExpansionTrainer(
+        config, env, fine_model, base_model,
+        device=device, grad_constraint=grad_constraint,
+    )
+    initial_params = {k: v.clone() for k, v in trainer.fine_model.named_parameters()}
+
+    losses = trainer.fit(num_iterations=2)
+
+    # fit returns one loss per AM round: 2 iters × (1 expand + 1 project) × 1 AM round = 4
+    assert len(losses) == 4
+    assert all(torch.isfinite(torch.tensor(l)) for l in losses)
+    assert any(
+        not torch.equal(v, initial_params[k])
+        for k, v in trainer.fine_model.named_parameters()
+    ), "model weights unchanged after fit"
