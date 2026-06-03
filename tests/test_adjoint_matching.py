@@ -24,24 +24,25 @@ Setting the bracket to zero gives the optimal perturbation:
 Reference-equivalence tests
 ----------------------------
 The current implementation (DDTensor-based) is compared against a raw-tensor
-reference that mirrors Adjoint_Matching_Mols/finetuning/flow_adjoint_solver.py.
-The only structural differences are:
+reference that mirrors a known implementation. The only structural differences are:
   - type: DDTensor vs raw torch.Tensor
   - g_term: .aggregate("sum").sum() vs .sum()  [identical for 2D tensors]
   - gradient: DDTensor.gradient() vs torch.autograd.grad()  [same computation]
   - result ordering: new reverses to forward-time; old stays backward-time
 """
 
+from typing import Any
 import pytest
 import torch
 from diffusiongym.schedulers import OptimalTransportScheduler
 from diffusiongym.types import DDTensor
+from diffusiongym.base_models import BaseModel
 
 from genexp.trainers.adjoint_matching import LeanAdjointSolverFlow, adj_matching_loss
 
 BATCH = 4
 DATA_DIM = 3
-T = 6      # number of timesteps including t=0 and t=1
+T = 6  # number of timesteps including t=0 and t=1
 TOL = 1e-5
 
 
@@ -49,14 +50,24 @@ TOL = 1e-5
 # Minimal oracle model
 # ---------------------------------------------------------------------------
 
-class ZeroVelocityModel:
+
+class ZeroVelocityModel(BaseModel[DDTensor]):
     """Velocity-predicting model that always returns zero."""
+
     output_type = "velocity"
 
     def __init__(self):
-        self.scheduler = OptimalTransportScheduler()
+        super().__init__(torch.device("cpu"))
+        self._scheduler = OptimalTransportScheduler()
 
-    def forward(self, x: DDTensor, t: torch.Tensor) -> DDTensor:
+    @property
+    def scheduler(self):
+        return self._scheduler
+
+    def sample_p0(self, n: int, **kwargs: Any):
+        return DDTensor(torch.zeros(n, DATA_DIM)), kwargs
+
+    def forward(self, x: DDTensor, t: torch.Tensor, **kwargs: Any) -> DDTensor:
         return x.zeros_like()
 
 
@@ -74,6 +85,7 @@ def zero_vel_solver():
 # Adjoint trajectory tests
 # ---------------------------------------------------------------------------
 
+
 def test_adjoint_trajectory_zero_velocity(zero_vel_solver):
     """For v=0 and R(x) = 0.5|x|², the adjoint is a(t) = -t·x₁ exactly."""
     torch.manual_seed(0)
@@ -81,7 +93,7 @@ def test_adjoint_trajectory_zero_velocity(zero_vel_solver):
     x1 = DDTensor(torch.randn(BATCH, DATA_DIM))
 
     result = zero_vel_solver.solve([x1] * T, ts)
-    t_out = result["t"]            # ts[:-1], shape (T-1,)
+    t_out = result["t"]  # ts[:-1], shape (T-1,)
     traj_adj = result["traj_adj"]  # T-1 DDTensors in forward-time order
 
     assert len(traj_adj) == T - 1
@@ -135,9 +147,9 @@ def test_adjoint_scales_linearly_with_x1(zero_vel_solver):
     r2 = zero_vel_solver.solve([DDTensor(x1.data * scale)] * T, ts)
 
     for k in range(T - 1):
-        assert torch.allclose(r2["traj_adj"][k].data, r1["traj_adj"][k].data * scale, atol=TOL), (
-            f"Linearity failed at k={k}"
-        )
+        assert torch.allclose(
+            r2["traj_adj"][k].data, r1["traj_adj"][k].data * scale, atol=TOL
+        ), f"Linearity failed at k={k}"
 
 
 def test_grad_fk_shifts_adjoint(zero_vel_solver):
@@ -170,13 +182,14 @@ def test_grad_fk_shifts_adjoint(zero_vel_solver):
 # adj_matching_loss tests
 # ---------------------------------------------------------------------------
 
+
 def test_adj_matching_loss_zero_at_optimum():
     """Loss is 0 at the optimal perturbation v_fine = v_base + (σ²/2)·adj."""
     torch.manual_seed(5)
-    adj    = DDTensor(torch.randn(BATCH, DATA_DIM))
-    sigma  = DDTensor(torch.rand(BATCH, DATA_DIM) + 0.1)
+    adj = DDTensor(torch.randn(BATCH, DATA_DIM))
+    sigma = DDTensor(torch.rand(BATCH, DATA_DIM) + 0.1)
     v_base = DDTensor(torch.randn(BATCH, DATA_DIM))
-    v_fine = v_base + sigma ** 2 * adj * 0.5
+    v_fine = v_base + sigma**2 * adj * 0.5
 
     loss = adj_matching_loss(v_base, v_fine, adj, sigma)
     assert loss.abs() < TOL, f"Expected 0, got {loss:.2e}"
@@ -185,8 +198,8 @@ def test_adj_matching_loss_zero_at_optimum():
 def test_adj_matching_loss_at_base_model():
     """When v_fine = v_base, loss = mean_batch sum_dim (σ·adj)²."""
     torch.manual_seed(6)
-    adj    = DDTensor(torch.randn(BATCH, DATA_DIM))
-    sigma  = DDTensor(torch.rand(BATCH, DATA_DIM) + 0.1)
+    adj = DDTensor(torch.randn(BATCH, DATA_DIM))
+    sigma = DDTensor(torch.rand(BATCH, DATA_DIM) + 0.1)
     v_base = DDTensor(torch.randn(BATCH, DATA_DIM))
 
     loss = adj_matching_loss(v_base, v_base, adj, sigma)
@@ -202,8 +215,8 @@ def test_adj_matching_loss_is_nonnegative():
     """Loss is always >= 0."""
     torch.manual_seed(7)
     for _ in range(10):
-        adj    = DDTensor(torch.randn(BATCH, DATA_DIM))
-        sigma  = DDTensor(torch.rand(BATCH, DATA_DIM) + 0.1)
+        adj = DDTensor(torch.randn(BATCH, DATA_DIM))
+        sigma = DDTensor(torch.rand(BATCH, DATA_DIM) + 0.1)
         v_base = DDTensor(torch.randn(BATCH, DATA_DIM))
         v_fine = DDTensor(torch.randn(BATCH, DATA_DIM))
         assert adj_matching_loss(v_base, v_fine, adj, sigma) >= 0
@@ -213,36 +226,45 @@ def test_adj_matching_loss_is_nonnegative():
 # Reference-equivalence tests (vs Adjoint_Matching_Mols raw-tensor impl)
 # ---------------------------------------------------------------------------
 
-class LinearVelocityModel:
-    """velocity model: v(x,t) = x @ A.T for a fixed matrix A."""
+
+class NeuralVelocityModel(torch.nn.Module):
+    """Time-varying velocity MLP: v(x, t) = MLP(concat(x, t))."""
+
     output_type = "velocity"
 
-    def __init__(self, A: torch.Tensor):
-        self.A = A
+    def __init__(self, data_dim: int, hidden_dim: int = 16):
+        super().__init__()
         self.scheduler = OptimalTransportScheduler()
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(data_dim + 1, hidden_dim),
+            torch.nn.Tanh(),
+            torch.nn.Linear(hidden_dim, data_dim),
+        )
 
-    def forward(self, x: DDTensor, t: torch.Tensor) -> DDTensor:
-        return DDTensor(x.data @ self.A.T)
+    def forward(self, x: DDTensor, t: torch.Tensor, **kwargs) -> DDTensor:
+        t_col = t.unsqueeze(-1)
+        return DDTensor(self.net(torch.cat([x.data, t_col], dim=-1)))
 
 
-def _ref_step(adj_raw, x_raw, A, scheduler, t_batch, dt):
+def _ref_step(adj_raw, x_raw, net, scheduler, t_batch, dt):
     """Raw-tensor adjoint step mirroring flow_adjoint_solver.py:
 
-        eps_pred = 2*v_pred - alpha_dot/(alpha+dt) * x_t
-        g_term   = (adj * eps_pred).sum()            # sum over ALL elements
-        v        = autograd.grad(g_term, x_t)[0]
-        adj_new  = adj + dt * v
+    eps_pred = 2*v_pred - alpha_dot/(alpha+dt) * x_t
+    g_term   = (adj * eps_pred).sum()            # sum over ALL elements
+    v        = autograd.grad(g_term, x_t)[0]
+    adj_new  = adj + dt * v
     """
     x_grad = x_raw.detach().requires_grad_(True)
     x_dd = DDTensor(x_grad)
 
-    alpha     = scheduler.alpha(x_dd, t_batch).data      # (batch, 1)
+    alpha = scheduler.alpha(x_dd, t_batch).data  # (batch, 1)
     alpha_dot = scheduler.alpha_dot(x_dd, t_batch).data  # (batch, 1)
 
-    v_pred   = x_grad @ A.T                              # linear velocity
+    t_col = t_batch.unsqueeze(-1)
+    v_pred = net(torch.cat([x_grad, t_col], dim=-1))
     eps_pred = 2 * v_pred - alpha_dot / (alpha + dt) * x_grad
-    g_term   = (adj_raw.detach() * eps_pred).sum()       # scalar
-    v        = torch.autograd.grad(g_term, x_grad)[0]
+    g_term = (adj_raw.detach() * eps_pred).sum()  # scalar
+    v = torch.autograd.grad(g_term, x_grad)[0]
 
     return (adj_raw.detach() + dt * v).detach()
 
@@ -250,7 +272,6 @@ def _ref_step(adj_raw, x_raw, A, scheduler, t_batch, dt):
 def test_single_step_matches_reference():
     """One adjoint step: DDTensor .gradient() == torch.autograd.grad()."""
     torch.manual_seed(20)
-    A = torch.randn(DATA_DIM, DATA_DIM) * 0.1
     scheduler = OptimalTransportScheduler()
 
     adj = DDTensor(torch.randn(BATCH, DATA_DIM))
@@ -258,11 +279,13 @@ def test_single_step_matches_reference():
     t_batch = torch.full((BATCH,), 0.6)
     dt = torch.tensor(0.2)
 
-    model = LinearVelocityModel(A)
-    solver = LeanAdjointSolverFlow(model, grad_reward_fn=lambda x: x, device=torch.device("cpu"))
+    model = NeuralVelocityModel(DATA_DIM).eval()
+    solver = LeanAdjointSolverFlow(
+        model, grad_reward_fn=lambda x: x, device=torch.device("cpu")
+    )
     adj_new, _ = solver.step(adj, x_t, t_batch, dt)
 
-    adj_ref = _ref_step(adj.data, x_t.data, A, scheduler, t_batch, dt)
+    adj_ref = _ref_step(adj.data, x_t.data, model.net, scheduler, t_batch, dt)
 
     assert torch.allclose(adj_new.data, adj_ref, atol=TOL), (
         f"Step mismatch: max err = {(adj_new.data - adj_ref).abs().max():.2e}"
@@ -273,7 +296,6 @@ def test_full_trajectory_matches_reference():
     """Full solve: new (DDTensor, forward-order) == reference (raw tensor, backward-order reversed)."""
     torch.manual_seed(21)
     T_local = 6
-    A = torch.randn(DATA_DIM, DATA_DIM) * 0.1
     scheduler = OptimalTransportScheduler()
 
     ts = torch.linspace(0, 1, T_local)
@@ -282,8 +304,10 @@ def test_full_trajectory_matches_reference():
 
     trajectories = [DDTensor(torch.randn(BATCH, DATA_DIM)) for _ in range(T_local)]
 
-    model = LinearVelocityModel(A)
-    solver = LeanAdjointSolverFlow(model, grad_reward_fn=lambda x: x, device=torch.device("cpu"))
+    model = NeuralVelocityModel(DATA_DIM).eval()
+    solver = LeanAdjointSolverFlow(
+        model, grad_reward_fn=lambda x: x, device=torch.device("cpu")
+    )
     result = solver.solve(trajectories, ts)
 
     # --- Reference: raw-tensor backward pass ---
@@ -292,7 +316,7 @@ def test_full_trajectory_matches_reference():
     for i in range(1, T_local):
         t_batch = ts_rev[i].unsqueeze(0).expand(BATCH)
         x_raw = trajectories[T_local - i - 1].data
-        adj_ref = _ref_step(adj_ref, x_raw, A, scheduler, t_batch, dt)
+        adj_ref = _ref_step(adj_ref, x_raw, model.net, scheduler, t_batch, dt)
         trajs_adj_ref.append(adj_ref)
 
     # Reference is in backward-time order; new code is in forward-time order.
@@ -312,22 +336,26 @@ def test_loss_formula_matches_reference():
 
     v_base_raw = torch.randn(BATCH, DATA_DIM)
     v_fine_raw = torch.randn(BATCH, DATA_DIM)
-    adj_raw    = torch.randn(BATCH, DATA_DIM)
+    adj_raw = torch.randn(BATCH, DATA_DIM)
     # σ must be same shape as x for DDTensor; old code used scalar-per-timestep
     # broadcast via sigma[:,None,None] — replicate with uniform per-element σ.
-    sigma_val  = 0.5
-    sigma_raw  = torch.full((BATCH, DATA_DIM), sigma_val)
+    sigma_val = 0.5
+    sigma_raw = torch.full((BATCH, DATA_DIM), sigma_val)
 
     # Reference formula (mirrors flow_adjoint.py adj_matching_loss):
-    diff         = v_fine_raw - v_base_raw
-    term_diff    = (2 / sigma_raw) * diff
-    term_adj     = sigma_raw * adj_raw
-    loss_ref     = ((term_diff - term_adj) ** 2).sum(dim=tuple(range(1, adj_raw.ndim))).mean()
+    diff = v_fine_raw - v_base_raw
+    term_diff = (2 / sigma_raw) * diff
+    term_adj = sigma_raw * adj_raw
+    loss_ref = (
+        ((term_diff - term_adj) ** 2).sum(dim=tuple(range(1, adj_raw.ndim))).mean()
+    )
 
     # New DDTensor formula:
     loss_new = adj_matching_loss(
-        DDTensor(v_base_raw), DDTensor(v_fine_raw),
-        DDTensor(adj_raw),    DDTensor(sigma_raw),
+        DDTensor(v_base_raw),
+        DDTensor(v_fine_raw),
+        DDTensor(adj_raw),
+        DDTensor(sigma_raw),
     )
 
     assert torch.allclose(loss_new, loss_ref, atol=TOL), (

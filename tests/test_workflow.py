@@ -1,7 +1,5 @@
 """
-Tests for the main genexp workflow.
-Part 1: legacy tensor models (DiffusionModel, VPSDE, EulerMaruyamaSampler).
-Part 2: diffusiongym-based FlowExpansionTrainer.
+Tests for the main genexp workflow (diffusiongym-based FlowExpansionTrainer).
 All tests run on CPU with a tiny 2-D network for speed.
 """
 
@@ -18,8 +16,6 @@ from diffusiongym.rewards import DummyReward
 from diffusiongym.schedulers import OptimalTransportScheduler
 from diffusiongym.types import DDTensor
 
-from genexp.models import DiffusionModel, VPSDE
-from genexp.sampling import EulerMaruyamaSampler
 from genexp.trainers.genexp import FlowExpansionTrainer
 
 
@@ -32,31 +28,18 @@ STEPS = 5  # discretization steps for env
 # Tiny helpers
 # ---------------------------------------------------------------------------
 
-def make_network():
-    return nn.Sequential(
-        nn.Linear(DATA_DIM + 1, 16),
-        nn.ReLU(),
-        nn.Linear(16, DATA_DIM),
-    )
-
-
-def make_diffusion_model(device="cpu"):
-    sde = VPSDE(0.1, 12, device=device)
-    return DiffusionModel(make_network(), sde).to(device)
-
 
 # ---------------------------------------------------------------------------
-# Tiny velocity BaseModel[DDTensor] for diffusiongym tests
+# Tiny velocity BaseModel[DDTensor]
 # ---------------------------------------------------------------------------
+
 
 class TinyVelocityModel(BaseModel[DDTensor]):
     output_type = "velocity"
 
     def __init__(self, dim: int, device: Optional[torch.device] = None):
         super().__init__(device or torch.device("cpu"))
-        self.net = nn.Sequential(
-            nn.Linear(dim + 1, 16), nn.ReLU(), nn.Linear(16, dim)
-        )
+        self.net = nn.Sequential(nn.Linear(dim + 1, 16), nn.ReLU(), nn.Linear(16, dim))
         self._scheduler = OptimalTransportScheduler()
 
     @property
@@ -82,96 +65,31 @@ def make_env(base_model, steps=STEPS):
 
 
 def make_fe_config():
-    return OmegaConf.create({
-        "gamma": 0.1,
-        "eta": 0.1,
-        "epsilon": 0.005,
-        "beta": 0.0,
-        "traj": True,
-        "lmbda": "const",
-        "adjoint_matching": {
-            "batch_size": BATCH,
-            "clip_grad_norm": 0.4,
-            "clip_loss": 1e5,
-            "lr": 0.01,
-            "sampling": {
-                "num_samples": BATCH,
+    return OmegaConf.create(
+        {
+            "gamma": 0.1,
+            "eta": 0.1,
+            "epsilon": 0.005,
+            "beta": 0.0,
+            "traj": True,
+            "lmbda": "const",
+            "adjoint_matching": {
+                "batch_size": BATCH,
+                "clip_grad_norm": 0.4,
+                "clip_loss": 1e5,
+                "lr": 0.01,
+                "sampling": {
+                    "num_samples": BATCH,
+                },
             },
-        },
-    })
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
-# Part 1: legacy tensor models
+# FlowExpansionTrainer tests
 # ---------------------------------------------------------------------------
 
-def test_vpsde_alpha_sigma_shape():
-    sde = VPSDE(0.1, 12, device="cpu")
-    t = torch.linspace(0, 1, BATCH).unsqueeze(1)
-    alpha, sigma = sde.get_alpha_sigma(t)
-    assert alpha.shape == (BATCH, 1)
-    assert sigma.shape == (BATCH, 1)
-
-
-def test_vpsde_alpha_sigma_range():
-    sde = VPSDE(0.1, 12, device="cpu")
-    t = torch.linspace(0, 1, 10).unsqueeze(1)
-    alpha, sigma = sde.get_alpha_sigma(t)
-    assert (alpha >= 0).all() and (alpha <= 1).all()
-    assert (sigma >= 0).all() and (sigma <= 1).all()
-
-
-def test_diffusion_model_forward_shape():
-    model = make_diffusion_model()
-    x = torch.randn(BATCH, DATA_DIM)
-    t = torch.rand(BATCH, 1)
-    out = model(x, t)
-    assert out.shape == (BATCH, DATA_DIM)
-
-
-def test_diffusion_model_velocity_field_shape():
-    model = make_diffusion_model()
-    x = torch.randn(BATCH, DATA_DIM)
-    t = torch.rand(BATCH, 1)
-    v = model.velocity_field(x, t)
-    assert v.shape == (BATCH, DATA_DIM)
-
-
-def test_diffusion_model_score_func_shape():
-    model = make_diffusion_model()
-    x = torch.randn(BATCH, DATA_DIM)
-    t = torch.rand(BATCH, 1).clamp(0.01, 0.99)
-    s = model.score_func(x, t)
-    assert s.shape == (BATCH, DATA_DIM)
-
-
-def test_sampler_trajectory_length():
-    model = make_diffusion_model()
-    sampler = EulerMaruyamaSampler(model, data_shape=(DATA_DIM,), device="cpu")
-    T = 6
-    trajs, ts = sampler.sample_trajectories(N=BATCH, T=T)
-    assert len(trajs) == T
-    assert ts.shape == (T,)
-
-
-def test_sampler_trajectory_shape():
-    model = make_diffusion_model()
-    sampler = EulerMaruyamaSampler(model, data_shape=(DATA_DIM,), device="cpu")
-    trajs, _ = sampler.sample_trajectories(N=BATCH, T=6)
-    assert trajs[0].full.shape == (BATCH, DATA_DIM)
-
-
-def test_sampler_no_nans():
-    model = make_diffusion_model()
-    sampler = EulerMaruyamaSampler(model, data_shape=(DATA_DIM,), device="cpu")
-    trajs, _ = sampler.sample_trajectories(N=BATCH, T=6)
-    for s in trajs:
-        assert not s.full.isnan().any()
-
-
-# ---------------------------------------------------------------------------
-# Part 2: diffusiongym-based FlowExpansionTrainer
-# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def fe_trainer():
@@ -180,7 +98,9 @@ def fe_trainer():
     fine_model = copy.deepcopy(base_model)
     env = make_env(base_model)
     config = make_fe_config()
-    return FlowExpansionTrainer(config, env, fine_model, base_model, device=torch.device(device))
+    return FlowExpansionTrainer(
+        config, env, fine_model, base_model, device=torch.device(device)
+    )
 
 
 def test_trainer_init(fe_trainer):
@@ -208,7 +128,9 @@ def test_trainer_finetune(fe_trainer):
 
 
 def test_trainer_update_base_model(fe_trainer):
-    original_params = {k: v.clone() for k, v in fe_trainer.base_model.named_parameters()}
+    original_params = {
+        k: v.clone() for k, v in fe_trainer.base_model.named_parameters()
+    }
     with torch.no_grad():
         for p in fe_trainer.fine_model.parameters():
             p.add_(0.1)
@@ -239,30 +161,40 @@ def test_full_tutorial_loop():
     ), "model weights unchanged after finetuning"
 
 
-def test_fit():
-    device = torch.device("cpu")
-    base_model = make_velocity_model("cpu")
+def make_fit_trainer(grad_constraint=None, device="cpu"):
+    base_model = make_velocity_model(device)
     fine_model = copy.deepcopy(base_model)
     env = make_env(base_model)
-
-    # Add num_iterations and finetune_steps so fit() can read them from config
     config = make_fe_config()
-    config.adjoint_matching.num_iterations = 1
     config.adjoint_matching.finetune_steps = 2
-
-    grad_constraint = lambda x: x  # dummy: ∇C(x) = x
-    trainer = FlowExpansionTrainer(
-        config, env, fine_model, base_model,
-        device=device, grad_constraint=grad_constraint,
+    return FlowExpansionTrainer(
+        config,
+        env,
+        fine_model,
+        base_model,
+        device=torch.device(device),
+        grad_constraint=grad_constraint,
     )
+
+
+def test_fit_skips_projection_without_constraint():
+    trainer = make_fit_trainer()
+    losses = trainer.fit(num_iterations=3)
+    # one loss per iteration (expand only — no grad_constraint)
+    assert len(losses) == 3
+    assert all(torch.isfinite(torch.tensor(l)) for l in losses)
+
+
+def test_fit_runs_projection_with_constraint():
+    trainer = make_fit_trainer(grad_constraint=lambda x: x)
     initial_params = {k: v.clone() for k, v in trainer.fine_model.named_parameters()}
 
     losses = trainer.fit(num_iterations=2)
 
-    # fit returns one loss per AM round: 2 iters × (1 expand + 1 project) × 1 AM round = 4
+    # two losses per iteration: one expand + one project
     assert len(losses) == 4
     assert all(torch.isfinite(torch.tensor(l)) for l in losses)
     assert any(
         not torch.equal(v, initial_params[k])
         for k, v in trainer.fine_model.named_parameters()
-    ), "model weights unchanged after fit"
+    ), "model weights unchanged after fit with projection"

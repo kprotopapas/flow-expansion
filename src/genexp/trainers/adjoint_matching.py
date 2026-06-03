@@ -1,4 +1,5 @@
 import numpy as np
+from contextlib import contextmanager
 from omegaconf import DictConfig
 from typing import Callable, Optional
 
@@ -7,7 +8,23 @@ from torch.utils.data import Dataset, ConcatDataset
 
 from diffusiongym.base_models import BaseModel
 from diffusiongym.environments import Environment
+from diffusiongym.schedulers import MemorylessNoiseSchedule
 from diffusiongym.types import D
+
+
+@contextmanager
+def _memoryless_noise(scheduler):
+    """Temporarily force the memoryless noise schedule on a scheduler."""
+    had = hasattr(scheduler, "_noise_schedule")
+    original = scheduler._noise_schedule if had else None
+    scheduler.noise_schedule = MemorylessNoiseSchedule(scheduler)
+    try:
+        yield
+    finally:
+        if had:
+            scheduler.noise_schedule = original
+        else:
+            del scheduler._noise_schedule
 
 
 def _velocity(model: BaseModel[D], x: D, t: torch.Tensor) -> D:
@@ -20,7 +37,7 @@ def _velocity(model: BaseModel[D], x: D, t: torch.Tensor) -> D:
         eta = scheduler.eta(x, t)
 
         return s * eta + kappa * x
-    
+
     elif model.output_type == "velocity":
         return model.forward(x, t)
 
@@ -31,7 +48,7 @@ def _velocity(model: BaseModel[D], x: D, t: torch.Tensor) -> D:
         eta = scheduler.eta(x, t)
         alpha = scheduler.alpha(x, t)
         beta = scheduler.beta(x, t)
-        return kappa * x + eta * (alpha * x_1 - x) / (beta ** 2)
+        return kappa * x + eta * (alpha * x_1 - x) / (beta**2)
 
     elif model.output_type == "epsilon":
         eps = model.forward(x, t)
@@ -58,7 +75,9 @@ class LeanAdjointSolverFlow:
         self.scheduler = base_model.scheduler
         self.grad_reward_fn = grad_reward_fn
         self.grad_f_k_fn = grad_f_k_fn
-        self.device = device or torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = device or torch.device(
+            "cuda:0" if torch.cuda.is_available() else "cpu"
+        )
 
     def step(self, adj, x_t, t: torch.Tensor, dt: torch.Tensor):
         """Single backward step of the lean adjoint ODE.
@@ -115,33 +134,33 @@ class LeanAdjointSolverFlow:
             traj_v_pred.append(v_pred.detach())
 
         return {
-            't': ts[:-1],
-            'traj_x': trajectories[:-1],
-            'traj_adj': list(reversed(trajs_adj)),
-            'traj_v_pred': list(reversed(traj_v_pred)),
+            "t": ts[:-1],
+            "traj_x": trajectories[:-1],
+            "traj_adj": list(reversed(trajs_adj)),
+            "traj_v_pred": list(reversed(traj_v_pred)),
         }
 
 
 class AMDataset(Dataset):
     def __init__(self, solver_info: dict):
-        self.t = solver_info['t']
-        self.traj_x = solver_info['traj_x']
-        self.traj_adj = solver_info['traj_adj']
-        self.traj_v_base = solver_info['traj_v_pred']
-        self.traj_sigma = solver_info['traj_sigma']
+        self.t = solver_info["t"]
+        self.traj_x = solver_info["traj_x"]
+        self.traj_adj = solver_info["traj_adj"]
+        self.traj_v_base = solver_info["traj_v_pred"]
+        self.traj_sigma = solver_info["traj_sigma"]
         self.T = self.t.size(0)
         self.bs = 1
 
     def __len__(self):
         return self.bs
 
-    def __getitem__(self, idx):
+    def __getitem__(self, index):
         return {
-            'ts': self.t,
-            'traj_x': self.traj_x,
-            'traj_adj': self.traj_adj,
-            'traj_v_base': self.traj_v_base,
-            'traj_sigma': self.traj_sigma,
+            "ts": self.t,
+            "traj_x": self.traj_x,
+            "traj_adj": self.traj_adj,
+            "traj_v_base": self.traj_v_base,
+            "traj_sigma": self.traj_sigma,
         }
 
 
@@ -151,7 +170,9 @@ def create_timestep_subset(total_steps, final_percent=0.25, sample_percent=0.25)
     sample_steps_count = int(total_steps * sample_percent)
     final_samples = np.arange(final_steps_count)
     remaining_steps = np.setdiff1d(np.arange(total_steps), final_samples)
-    additional_samples = np.random.choice(remaining_steps, size=sample_steps_count, replace=False)
+    additional_samples = np.random.choice(
+        remaining_steps, size=sample_steps_count, replace=False
+    )
     return np.sort(np.concatenate([final_samples, additional_samples]))
 
 
@@ -161,7 +182,8 @@ def adj_matching_loss(v_base, v_fine, adj, sigma) -> torch.Tensor:
     term_diff = (diff / sigma) * 2
     term_adj = sigma * adj
     term_difference = term_diff - term_adj
-    return (term_difference ** 2).aggregate("sum").mean()
+    return (term_difference**2).aggregate("sum").mean()
+
 
 class AMTrainerFlow:
     def __init__(
@@ -177,7 +199,9 @@ class AMTrainerFlow:
     ):
         self.config = config
         self.sampling_config = config.sampling
-        self.device = device or torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = device or torch.device(
+            "cuda:0" if torch.cuda.is_available() else "cpu"
+        )
         self.verbose = verbose
 
         self.clip_grad_norm = config.get("clip_grad_norm", 1e5)
@@ -195,9 +219,11 @@ class AMTrainerFlow:
         self.configure_optimizers()
 
     def configure_optimizers(self):
-        if hasattr(self, 'optimizer'):
+        if hasattr(self, "optimizer"):
             del self.optimizer
-        self.optimizer = torch.optim.Adam(self.fine_model.parameters(), lr=self.config.lr)
+        self.optimizer = torch.optim.Adam(
+            self.fine_model.parameters(), lr=self.config.lr
+        )
 
     def get_model(self):
         return self.fine_model
@@ -207,7 +233,8 @@ class AMTrainerFlow:
         """Sample trajectories from the fine model using env."""
         original_base = self.env.base_model
         self.env.base_model = self.fine_model
-        env_sample = self.env.sample(self.config.batch_size, pbar=False)
+        with _memoryless_noise(self.env.scheduler):
+            env_sample = self.env.sample(self.config.batch_size, pbar=False)
         self.env.base_model = original_base
         return env_sample
 
@@ -229,7 +256,7 @@ class AMTrainerFlow:
             ts = env_sample.timesteps.to(self.device)
 
             solver_info = solver.solve(trajectories=traj, ts=ts)
-            solver_info['traj_sigma'] = [d.to("cpu") for d in env_sample.diffusions]
+            solver_info["traj_sigma"] = [d.to("cpu") for d in env_sample.diffusions]
 
             datasets.append(AMDataset(solver_info=solver_info))
 
@@ -238,11 +265,11 @@ class AMTrainerFlow:
         return ConcatDataset(datasets)
 
     def train_step(self, sample: dict) -> torch.Tensor:
-        ts = sample['ts'].to(self.device)
-        traj_x = [x.to(self.device) for x in sample['traj_x']]
-        traj_adj = [a.to(self.device) for a in sample['traj_adj']]
-        traj_v_base = [v.to(self.device) for v in sample['traj_v_base']]
-        traj_sigma = [s.to(self.device) for s in sample['traj_sigma']]
+        ts = sample["ts"].to(self.device)
+        traj_x = [x.to(self.device) for x in sample["traj_x"]]
+        traj_adj = [a.to(self.device) for a in sample["traj_adj"]]
+        traj_v_base = [v.to(self.device) for v in sample["traj_v_base"]]
+        traj_sigma = [s.to(self.device) for s in sample["traj_sigma"]]
 
         idxs = create_timestep_subset(ts.shape[0])
 
@@ -251,7 +278,9 @@ class AMTrainerFlow:
             n = len(traj_x[idx])
             t = ts[idx].unsqueeze(0).expand(n)
             v_fine_t = _velocity(self.fine_model, traj_x[idx], t)
-            loss_t = adj_matching_loss(traj_v_base[idx], v_fine_t, traj_adj[idx], traj_sigma[idx])
+            loss_t = adj_matching_loss(
+                traj_v_base[idx], v_fine_t, traj_adj[idx], traj_sigma[idx]
+            )
             losses.append(loss_t)
 
         if not losses:
@@ -267,7 +296,9 @@ class AMTrainerFlow:
         if self.clip_loss > 0.0:
             loss = torch.clamp(loss, min=0.0, max=self.clip_loss)
         if self.clip_grad_norm > 0.0:
-            torch.nn.utils.clip_grad_norm_(self.fine_model.parameters(), self.clip_grad_norm)
+            torch.nn.utils.clip_grad_norm_(
+                self.fine_model.parameters(), self.clip_grad_norm
+            )
 
         self.optimizer.step()
         return loss

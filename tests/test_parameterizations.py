@@ -19,6 +19,7 @@ import pytest
 import torch
 from diffusiongym.schedulers import OptimalTransportScheduler
 from diffusiongym.types import DDTensor
+from diffusiongym import BaseModel
 
 from genexp.trainers.adjoint_matching import _velocity
 from genexp.trainers.genexp import _score_func
@@ -28,18 +29,26 @@ BATCH = 8
 TOL = 1e-5
 
 
-class OracleModel:
+class OracleModel(BaseModel[DDTensor]):
     """Minimal model stub returning the analytic ground-truth for each output_type."""
 
     def __init__(self, output_type: str):
+        super().__init__(torch.device("cpu"))
         self.output_type = output_type
-        self.scheduler = OptimalTransportScheduler()
+        self._scheduler = OptimalTransportScheduler()
+
+    @property
+    def scheduler(self):
+        return self._scheduler
+
+    def sample_p0(self, n: int, **kwargs):
+        return DDTensor(torch.zeros(n, DATA_DIM)), kwargs
 
     def forward(self, x: DDTensor, t: torch.Tensor) -> DDTensor:
         sched = self.scheduler
-        alpha = sched.alpha(x, t)      # DDTensor, shape (batch, 1), values = t
-        beta = sched.beta(x, t)        # DDTensor, shape (batch, 1), values = 1-t
-        var = alpha ** 2 + beta ** 2   # DDTensor, σ²(t) broadcast to (batch, 1)
+        alpha = sched.alpha(x, t)  # DDTensor, shape (batch, 1), values = t
+        beta = sched.beta(x, t)  # DDTensor, shape (batch, 1), values = 1-t
+        var = alpha**2 + beta**2  # DDTensor, σ²(t) broadcast to (batch, 1)
 
         if self.output_type == "score":
             return -x / var
@@ -62,19 +71,19 @@ class OracleModel:
 def inputs():
     torch.manual_seed(42)
     # Avoid t ≈ 0 where κ = α̇/α = 1/t diverges.
-    t = torch.rand(BATCH) * 0.6 + 0.2   # uniform on [0.2, 0.8]
+    t = torch.rand(BATCH) * 0.6 + 0.2  # uniform on [0.2, 0.8]
     x = DDTensor(torch.randn(BATCH, DATA_DIM))
     return x, t
 
 
 def _analytic_score(x: DDTensor, t: torch.Tensor) -> DDTensor:
-    var = t ** 2 + (1 - t) ** 2                           # shape (batch,)
+    var = t**2 + (1 - t) ** 2  # shape (batch,)
     var_bd = var.view(BATCH, *([1] * (x.data.ndim - 1)))  # (batch, 1, ...)
     return DDTensor(-x.data / var_bd)
 
 
 def _analytic_velocity(x: DDTensor, t: torch.Tensor) -> DDTensor:
-    var = t ** 2 + (1 - t) ** 2
+    var = t**2 + (1 - t) ** 2
     var_bd = var.view(BATCH, *([1] * (x.data.ndim - 1)))
     coeff = (2 * t - 1).view(BATCH, *([1] * (x.data.ndim - 1)))
     return DDTensor(x.data * coeff / var_bd)
