@@ -32,6 +32,42 @@ Flow Expansion is built on top of [diffusiongym](https://github.com/cristianpjen
 
 diffusiongym then handles environment construction, SDE simulation, and trajectory storage. `FlowExpansionTrainer` runs the optimization loop on top.
 
+## Quickstart
+
+Check `tutorial.ipynb` for a complete worked example on a toy 1D trimodal GMM:
+
+```python
+import torch, diffusiongym
+from omegaconf import OmegaConf
+from genexp import FlowExpansionTrainer
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# env.reward is a SigmoidalConstraint — automatically enables the project step
+env = diffusiongym.make(
+    base_model="1d/trimodal_gmm",
+    reward="1d/sigmoidal",
+    discretization_steps=50,
+    device=device,
+)
+
+config = OmegaConf.create({
+    "gamma": 1.0, "eta": 1.0, "beta": 0.0, "epsilon": 0.01,
+    "traj": True, "lmbda": "const",
+    "adjoint_matching": {
+        "lr": 1e-4, "batch_size": 128, "num_iterations": 2,
+        "finetune_steps": 50, "sampling": {"num_samples": 512},
+    },
+    "ddpo": {
+        "lr": 1e-4, "batch_size": 128, "num_iterations": 2,
+        "finetune_steps": 50, "sampling": {"num_samples": 512},
+    },
+})
+
+trainer = FlowExpansionTrainer(config, env, device=device)
+losses = trainer.fit(num_iterations=3)
+```
+
 ## Usage
 
 ### 1. Data type
@@ -198,41 +234,6 @@ losses = trainer.fit(num_iterations=10)
 
 The expand step uses the score function of the current base model as the reward signal. The project step uses DDPO with `env.reward`'s hard (binary) output as the reward, so it trains the model to satisfy the constraint. If `env.reward` is not a `Constraint`, or if the `ddpo` config block is absent, the project step is skipped.
 
-## Quickstart
-
-Check `tutorial.ipynb` for a complete worked example on a toy 1D trimodal GMM:
-
-```python
-import torch, diffusiongym
-from omegaconf import OmegaConf
-from genexp import FlowExpansionTrainer
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# env.reward is a SigmoidalConstraint — automatically enables the project step
-env = diffusiongym.make(
-    base_model="1d/trimodal_gmm",
-    reward="1d/sigmoidal",
-    discretization_steps=50,
-    device=device,
-)
-
-config = OmegaConf.create({
-    "gamma": 1.0, "eta": 1.0, "beta": 0.0, "epsilon": 0.01,
-    "traj": True, "lmbda": "const",
-    "adjoint_matching": {
-        "lr": 1e-4, "batch_size": 128, "num_iterations": 2,
-        "finetune_steps": 50, "sampling": {"num_samples": 512},
-    },
-    "ddpo": {
-        "lr": 1e-4, "batch_size": 128, "num_iterations": 2,
-        "finetune_steps": 50, "sampling": {"num_samples": 512},
-    },
-})
-
-trainer = FlowExpansionTrainer(config, env, device=device)
-losses = trainer.fit(num_iterations=3)
-```
 
 ## Citation
 
