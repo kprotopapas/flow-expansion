@@ -3,7 +3,6 @@ Tests for the main genexp workflow (diffusiongym-based FlowExpansionTrainer).
 All tests run on CPU with a tiny 2-D network for speed.
 """
 
-import copy
 import pytest
 import torch
 import torch.nn as nn
@@ -16,22 +15,13 @@ from diffusiongym.rewards import DummyReward
 from diffusiongym.schedulers import OptimalTransportScheduler
 from diffusiongym.types import DDTensor
 
+from genexp.constraints import Constraint
 from genexp.trainers.genexp import FlowExpansionTrainer
 
 
 DATA_DIM = 2
 BATCH = 4
 STEPS = 5  # discretization steps for env
-
-
-# ---------------------------------------------------------------------------
-# Tiny helpers
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Tiny velocity BaseModel[DDTensor]
-# ---------------------------------------------------------------------------
 
 
 class TinyVelocityModel(BaseModel[DDTensor]):
@@ -56,51 +46,58 @@ class TinyVelocityModel(BaseModel[DDTensor]):
         return DDTensor(out)
 
 
+class DummyConstraint(Constraint[DDTensor]):
+    """Trivial constraint: soft=0.5, hard=1 everywhere."""
+
+    def __call__(self, sample: DDTensor, latent: DDTensor, **kwargs: Any):
+        n = len(sample)
+        soft = torch.full((n,), 0.5, device=sample.device)
+        hard = torch.ones(n, device=sample.device)
+        return soft, hard
+
+
 def make_velocity_model(device="cpu"):
     return TinyVelocityModel(DATA_DIM, torch.device(device))
 
 
-def make_env(base_model, steps=STEPS):
-    return VelocityEnvironment(base_model, DummyReward(), discretization_steps=steps)
-
-
-def make_fe_config():
-    return OmegaConf.create(
-        {
-            "gamma": 0.1,
-            "eta": 0.1,
-            "epsilon": 0.005,
-            "beta": 0.0,
-            "traj": True,
-            "lmbda": "const",
-            "adjoint_matching": {
-                "batch_size": BATCH,
-                "clip_grad_norm": 0.4,
-                "clip_loss": 1e5,
-                "lr": 0.01,
-                "sampling": {
-                    "num_samples": BATCH,
-                },
-            },
-        }
+def make_env(base_model, reward=None, steps=STEPS):
+    return VelocityEnvironment(
+        base_model, reward or DummyReward(), discretization_steps=steps
     )
 
 
-# ---------------------------------------------------------------------------
-# FlowExpansionTrainer tests
-# ---------------------------------------------------------------------------
+def make_fe_config(with_ddpo=False):
+    cfg = {
+        "gamma": 0.1,
+        "eta": 0.1,
+        "epsilon": 0.005,
+        "beta": 0.0,
+        "traj": True,
+        "lmbda": "const",
+        "adjoint_matching": {
+            "batch_size": BATCH,
+            "clip_grad_norm": 0.4,
+            "clip_loss": 1e5,
+            "lr": 0.01,
+            "finetune_steps": 2,
+            "sampling": {"num_samples": BATCH},
+        },
+    }
+    if with_ddpo:
+        cfg["ddpo"] = {
+            "batch_size": BATCH,
+            "lr": 0.01,
+            "num_iterations": 1,
+            "finetune_steps": 2,
+            "sampling": {"num_samples": BATCH},
+        }
+    return OmegaConf.create(cfg)
 
 
 @pytest.fixture
 def fe_trainer():
-    device = "cpu"
-    base_model = make_velocity_model(device)
-    fine_model = copy.deepcopy(base_model)
-    env = make_env(base_model)
-    config = make_fe_config()
-    return FlowExpansionTrainer(
-        config, env, fine_model, base_model, device=torch.device(device)
-    )
+    env = make_env(make_velocity_model())
+    return FlowExpansionTrainer(make_fe_config(), env, device=torch.device("cpu"))
 
 
 def test_trainer_init(fe_trainer):
@@ -140,13 +137,8 @@ def test_trainer_update_base_model(fe_trainer):
 
 
 def test_full_tutorial_loop():
-    device = torch.device("cpu")
-    base_model = make_velocity_model("cpu")
-    fine_model = copy.deepcopy(base_model)
-    env = make_env(base_model)
-    config = make_fe_config()
-
-    trainer = FlowExpansionTrainer(config, env, fine_model, base_model, device=device)
+    env = make_env(make_velocity_model())
+    trainer = FlowExpansionTrainer(make_fe_config(), env, device=torch.device("cpu"))
     initial_params = {k: v.clone() for k, v in trainer.fine_model.named_parameters()}
 
     for _ in range(2):
@@ -161,37 +153,25 @@ def test_full_tutorial_loop():
     ), "model weights unchanged after finetuning"
 
 
-def make_fit_trainer(grad_constraint=None, device="cpu"):
-    base_model = make_velocity_model(device)
-    fine_model = copy.deepcopy(base_model)
-    env = make_env(base_model)
-    config = make_fe_config()
-    config.adjoint_matching.finetune_steps = 2
-    return FlowExpansionTrainer(
-        config,
-        env,
-        fine_model,
-        base_model,
-        device=torch.device(device),
-        grad_constraint=grad_constraint,
-    )
-
-
 def test_fit_skips_projection_without_constraint():
-    trainer = make_fit_trainer()
+    env = make_env(make_velocity_model())
+    trainer = FlowExpansionTrainer(make_fe_config(), env, device=torch.device("cpu"))
     losses = trainer.fit(num_iterations=3)
-    # one loss per iteration (expand only — no grad_constraint)
+    # one AM loss per iteration — no constraint so no projection
     assert len(losses) == 3
     assert all(torch.isfinite(torch.tensor(l)) for l in losses)
 
 
 def test_fit_runs_projection_with_constraint():
-    trainer = make_fit_trainer(grad_constraint=lambda x: x)
+    env = make_env(make_velocity_model(), reward=DummyConstraint())
+    trainer = FlowExpansionTrainer(
+        make_fe_config(with_ddpo=True), env, device=torch.device("cpu")
+    )
     initial_params = {k: v.clone() for k, v in trainer.fine_model.named_parameters()}
 
     losses = trainer.fit(num_iterations=2)
 
-    # two losses per iteration: one expand + one project
+    # two losses per iteration: one AM expand + one DDPO project
     assert len(losses) == 4
     assert all(torch.isfinite(torch.tensor(l)) for l in losses)
     assert any(

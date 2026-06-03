@@ -8,12 +8,28 @@ import torch.distributions as dist
 import torch.nn.functional as F
 from torch import nn
 
-from diffusiongym.registry import base_model_registry
+from diffusiongym.registry import base_model_registry, reward_registry
+from genexp.constraints import Constraint
 from diffusiongym.schedulers import OptimalTransportScheduler, Scheduler
 from diffusiongym.types import DDTensor
 from diffusiongym.utils import append_dims, train_base_model
 
 from diffusiongym.base_models.base import BaseModel
+
+
+@reward_registry.register("1d/sigmoidal")
+class SigmoidalReward(Constraint[DDTensor]):
+    """Sigmoidal reward for one-dimensional toy environments."""
+
+    def __call__(self, sample: DDTensor, latent: DDTensor, **kwargs: Any) -> tuple[torch.Tensor, torch.Tensor]:
+        """Evaluate the reward function at the given points."""
+        loc, scale = (
+            kwargs.get("loc", torch.tensor(0.0)),
+            kwargs.get("scale", torch.tensor(1.0)),
+        )
+        sigmoid = torch.sigmoid((sample.data - loc) / scale)
+        result: torch.Tensor = sigmoid.to(torch.float32).squeeze()
+        return result, 1.0 * (result > loc).squeeze()
 
 
 @base_model_registry.register("1d/trimodal_gmm")
@@ -117,9 +133,7 @@ class SinusoidalTimeEmbedding(nn.Module):
         t_mult: float = 1000.0,
     ) -> None:
         super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, hidden_dim)
-        )
+        self.mlp = nn.Sequential(nn.Linear(dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, hidden_dim))
         self.t_mult = t_mult
         half = dim // 2
         freqs = torch.exp(-math.log(window_size) * torch.arange(half, dtype=torch.float32) / half)

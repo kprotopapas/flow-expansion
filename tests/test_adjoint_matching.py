@@ -93,8 +93,8 @@ def test_adjoint_trajectory_zero_velocity(zero_vel_solver):
     x1 = DDTensor(torch.randn(BATCH, DATA_DIM))
 
     result = zero_vel_solver.solve([x1] * T, ts)
-    t_out = result["t"]  # ts[:-1], shape (T-1,)
-    traj_adj = result["traj_adj"]  # T-1 DDTensors in forward-time order
+    t_out = result.ts  # ts[:-1], shape (T-1,)
+    traj_adj = result.traj_adj  # T-1 DDTensors in forward-time order
 
     assert len(traj_adj) == T - 1
 
@@ -114,7 +114,7 @@ def test_velocity_prediction_stored_correctly(zero_vel_solver):
     x1 = DDTensor(torch.randn(BATCH, DATA_DIM))
 
     result = zero_vel_solver.solve([x1] * T, ts)
-    traj_v = result["traj_v_pred"]
+    traj_v = result.traj_v_base
 
     assert len(traj_v) == T - 1
     for k, v_k in enumerate(traj_v):
@@ -130,9 +130,9 @@ def test_adjoint_at_t0_is_zero(zero_vel_solver):
     x1 = DDTensor(torch.randn(BATCH, DATA_DIM) * 10)  # large x₁
 
     result = zero_vel_solver.solve([x1] * T, ts)
-    a0 = result["traj_adj"][0]  # t_out[0] = 0
+    a0 = result.traj_adj[0]  # t_out[0] = 0
 
-    assert result["t"][0].item() == pytest.approx(0.0)
+    assert result.ts[0].item() == pytest.approx(0.0)
     assert torch.allclose(a0.data, torch.zeros_like(a0.data), atol=TOL)
 
 
@@ -148,7 +148,7 @@ def test_adjoint_scales_linearly_with_x1(zero_vel_solver):
 
     for k in range(T - 1):
         assert torch.allclose(
-            r2["traj_adj"][k].data, r1["traj_adj"][k].data * scale, atol=TOL
+            r2.traj_adj[k].data, r1.traj_adj[k].data * scale, atol=TOL
         ), f"Linearity failed at k={k}"
 
 
@@ -171,7 +171,7 @@ def test_grad_fk_shifts_adjoint(zero_vel_solver):
 
     # At t=0 the multiplicative factor is exactly 0, so any adj from prior steps
     # is killed. Only the -dt*c subtraction at the last step survives.
-    a0 = result["traj_adj"][0]
+    a0 = result.traj_adj[0]
     expected = -dt.item() * c_val
     assert torch.allclose(a0.data, expected, atol=TOL), (
         f"a(0) with const grad_fk: max err = {(a0.data - expected).abs().max():.2e}"
@@ -323,7 +323,7 @@ def test_full_trajectory_matches_reference():
     trajs_adj_ref_fwd = list(reversed(trajs_adj_ref))
 
     for k in range(T_local - 1):
-        new_adj = result["traj_adj"][k].data
+        new_adj = result.traj_adj[k].data
         ref_adj = trajs_adj_ref_fwd[k]
         assert torch.allclose(new_adj, ref_adj, atol=TOL), (
             f"Trajectory mismatch at k={k}: max err = {(new_adj - ref_adj).abs().max():.2e}"

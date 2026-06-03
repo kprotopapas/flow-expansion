@@ -8,14 +8,18 @@ This repository contains the official implementation of the Flow Expansion algor
 
 ## Installation
 
-```bash
-pip install genexp
-```
-
-Or, to install from source in editable mode:
+Either use pip:
 
 ```bash
 pip install -e .
+```
+
+Or first install `uv` here: [https://docs.astral.sh/uv/getting-started/installation/](https://docs.astral.sh/uv/getting-started/installation/)
+
+Then run:
+
+```bash
+uv sync
 ```
 
 ## Overview
@@ -40,7 +44,7 @@ from diffusiongym import DDTensor
 x = DDTensor(torch.randn(batch_size, dim))
 ```
 
-For structured data (graphs, molecules, images with conditioning), subclass `DDMixin` and implement `apply`, `combine`, `aggregate`, `collate`, `__len__`, and `__getitem__`. See [diffusiongym's types documentation](https://cristianpjensen.github.io/diffusiongym/) for details.
+For structured data (graphs, molecules, images with conditioning), use one of the existing types or subclass `DDMixin` and implement `apply`, `combine`, `aggregate`, `collate`, `__len__`, and `__getitem__`. See [diffusiongym's types documentation](https://cristianpjensen.github.io/diffusiongym/) for details.
 
 ### 2. Base model
 
@@ -76,9 +80,7 @@ class MyFlowModel(BaseModel[DDTensor]):
         return DDTensor(out)
 ```
 
-The `scheduler` defines the interpolant `x_t = α_t x_1 + β_t x_0`. `OptimalTransportScheduler` uses the linear schedule `α_t = t`, `β_t = 1 − t`. `CosineScheduler` and `DiffusionScheduler` are also available.
-
-All four `output_type` values are mathematically equivalent — `FlowExpansionTrainer` converts between them internally using the scheduler.
+`FlowExpansionTrainer` converts all outputs to a score function internally using the scheduler. The `scheduler` defines the interpolant `x_t = α_t x_1 + β_t x_0`. `OptimalTransportScheduler` uses the linear schedule `α_t = t`, `β_t = 1 − t`. `CosineScheduler` and `DiffusionScheduler` are also available.
 
 The base class provides `train_loss(x1)` automatically once `output_type` and `scheduler` are set, so you can train your model with:
 
@@ -87,19 +89,28 @@ import diffusiongym
 diffusiongym.train_base_model(model, optimizer, data, steps=10_000)
 ```
 
-### 3. Reward
+### 3. Constraint
 
-Subclass `Reward[D]` and implement `__call__`, which returns a `(rewards, valids)` pair — both `torch.Tensor` of shape `(n,)`:
+`FlowExpansionTrainer` expects the environment's reward to be a `Constraint` — a subclass of `Reward[D]` that formalises the split between a **soft** (differentiable) and a **hard** (binary) form of the constraint:
+
+| Return value | Meaning | Used by |
+|---|---|---|
+| `soft` | Differentiable approximation in [0, 1] | Adjoint-matching expand step |
+| `hard` | Binary feasibility indicator {0, 1} | DDPO project step |
 
 ```python
-from diffusiongym import Reward, DDTensor
+from genexp import Constraint
+from diffusiongym.types import DDTensor
 
-class MyReward(Reward[DDTensor]):
-    def __call__(self, sample: DDTensor, latent: DDTensor, **kwargs) -> tuple[torch.Tensor, torch.Tensor]:
-        rewards = -sample.data.norm(dim=-1)           # example: penalise large norms
-        valids  = torch.ones(len(sample))
-        return rewards, valids
+class MyConstraint(Constraint[DDTensor]):
+    def __call__(self, sample: DDTensor, latent: DDTensor, **kwargs):
+        score = some_verifier(sample.data)        # differentiable score in [0, 1]
+        soft  = torch.sigmoid(score)
+        hard  = (score > 0.5).float()
+        return soft, hard
 ```
+
+The base class provides `grad_log_soft(x)` — the gradient of `log(soft(x))` w.r.t. `x` — for use by the expand step. If your reward is not a `Constraint` (e.g. a plain `Reward`), the project step is skipped.
 
 ### 4. Environment
 
@@ -116,15 +127,7 @@ env = diffusiongym.construct_env(
 )
 ```
 
-Alternatively, instantiate the environment class directly:
-
-```python
-from diffusiongym import VelocityEnvironment   # or Score/Epsilon/EndpointEnvironment
-
-env = VelocityEnvironment(model, MyReward(), discretization_steps=100)
-```
-
-If your model is registered in diffusiongym's registry, you can also use the `make()` factory:
+If your model and constraints are registered in diffusiongym's registries you can also use the `make()` factory:
 
 ```python
 from diffusiongym import base_model_registry
@@ -141,69 +144,93 @@ env = diffusiongym.make(
 )
 ```
 
-### 5. Flow Expansion trainer
-
-Once you have an environment, pass it to `FlowExpansionTrainer` along with fine and base model copies:
+Alternatively, instantiate the environment class directly:
 
 ```python
-import copy
+from diffusiongym import VelocityEnvironment   # or Score/Epsilon/EndpointEnvironment
+
+env = VelocityEnvironment(model, MyReward(), discretization_steps=100)
+```
+
+### 5. Flow Expansion trainer
+
+Pass the environment directly to `FlowExpansionTrainer`. The trainer creates its own deep copies of `env.base_model` for the fine and reference models, and auto-detects the constraint from `env.reward`:
+
+```python
 from omegaconf import OmegaConf
 from genexp import FlowExpansionTrainer
 
 config = OmegaConf.create({
-    "gamma": 1.0,       # score-weighting strength
-    "eta": 1.0,         # projection step weight (set 0 if no constraint)
-    "beta": 0.0,        # score subtraction coefficient
-    "epsilon": 0.01,    # endpoint clipping
-    "traj": True,       # use trajectory-level adjoint (recommended)
+    "gamma": 1.0,       # score-weighting strength for the expand step
+    "eta": 1.0,         # projection step weight (set 0 to skip projection)
+    "beta": 0.0,        # KL subtraction coefficient
+    "epsilon": 0.01,    # clipping for t → 1
+    "traj": True,       # trajectory-level adjoint (recommended)
     "lmbda": "const",   # lambda schedule: "const" or "variance"
     "adjoint_matching": {
         "lr": 1e-4,
         "batch_size": 128,
-        "clip_grad_norm": 1.0,
-        "clip_loss": 1e5,
+        "num_iterations": 2,        # AM rounds per expand step
+        "finetune_steps": 50,
+        "sampling": {"num_samples": 512},
+    },
+    # Include "ddpo" to enable the constraint projection step.
+    # Requires env.reward to be a Constraint subclass.
+    "ddpo": {
+        "lr": 1e-4,
+        "batch_size": 128,
+        "num_iterations": 2,        # DDPO rounds per project step
+        "finetune_steps": 50,
         "sampling": {"num_samples": 512},
     },
 })
 
-fine_model = copy.deepcopy(env.base_model)
-base_model = copy.deepcopy(env.base_model)
-
-trainer = FlowExpansionTrainer(config, env, fine_model, base_model, device=device)
+trainer = FlowExpansionTrainer(config, env, device=device)
 ```
 
-Then run the expansion loop with `fit`. Each mirror-descent iteration consists of an **expand** step (move toward higher reward) followed by a **project** step (pull back toward the constraint set), each with one or more adjoint-matching fine-tuning rounds configured via `adjoint_matching.num_iterations` and `adjoint_matching.finetune_steps`:
+Then run the mirror-descent loop with `fit`. Each iteration consists of an **expand** step (adjoint matching toward higher reward) followed by a **project** step (DDPO toward constraint satisfaction), both sharing the same fine-tuned model:
 
 ```python
 losses = trainer.fit(num_iterations=10)
 ```
 
-`fit` returns a flat list of per-AM-round losses (expand rounds first, then project rounds, for each iteration), which you can use to monitor convergence.
+`fit` returns a flat list of per-round losses (AM losses from the expand step, then DDPO losses from the project step, for each iteration).
 
-`project()` requires `grad_constraint` to be set on the trainer (pass it as a keyword argument to `FlowExpansionTrainer`). It is the gradient of the constraint functional with respect to the sample.
+The expand step uses the score function of the current base model as the reward signal. The project step uses DDPO with `env.reward`'s hard (binary) output as the reward, so it trains the model to satisfy the constraint. If `env.reward` is not a `Constraint`, or if the `ddpo` config block is absent, the project step is skipped.
 
 ## Quickstart
 
-Check `tutorial.ipynb` for a complete worked example on a 1D trimodal GMM, using diffusiongym's built-in pre-trained model:
+Check `tutorial.ipynb` for a complete worked example on a toy 1D trimodal GMM:
 
 ```python
-import diffusiongym, copy
+import torch, diffusiongym
 from omegaconf import OmegaConf
 from genexp import FlowExpansionTrainer
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# env.reward is a SigmoidalConstraint — automatically enables the project step
 env = diffusiongym.make(
     base_model="1d/trimodal_gmm",
-    reward="1d/binary",
+    reward="1d/sigmoidal",
     discretization_steps=50,
     device=device,
 )
 
-fine_model = copy.deepcopy(env.base_model)
-base_model = copy.deepcopy(env.base_model)
-trainer = FlowExpansionTrainer(config, env, fine_model, base_model, device=device)
+config = OmegaConf.create({
+    "gamma": 1.0, "eta": 1.0, "beta": 0.0, "epsilon": 0.01,
+    "traj": True, "lmbda": "const",
+    "adjoint_matching": {
+        "lr": 1e-4, "batch_size": 128, "num_iterations": 2,
+        "finetune_steps": 50, "sampling": {"num_samples": 512},
+    },
+    "ddpo": {
+        "lr": 1e-4, "batch_size": 128, "num_iterations": 2,
+        "finetune_steps": 50, "sampling": {"num_samples": 512},
+    },
+})
 
+trainer = FlowExpansionTrainer(config, env, device=device)
 losses = trainer.fit(num_iterations=3)
 ```
 
@@ -239,5 +266,16 @@ References for verifier-free flow expansion methods:
 	pdf = {https://arxiv.org/pdf/2506.15385},
 	title = {Provable Maximum Entropy Manifold Exploration via Diffusion Models},
 	year = {2025}
+}
+```
+
+Reference for the [diffusiongym](https://github.com/cristianpjensen/diffusiongym) library:
+
+```
+@inproceedings{jensen2026value,
+  title={Value Matching: Scalable and Gradient-Free Reward-Guided Flow Adaptation},
+  author={Cristian Perez Jensen and Luca Schaufelberger and Riccardo De Santi and Kjell Jorner and Andreas Krause},
+  booktitle={The Fourteenth International Conference on Learning Representations},
+  year={2026},
 }
 ```
