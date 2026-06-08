@@ -235,11 +235,13 @@ class AMTrainerFlow:
     @torch.no_grad()
     def sample_trajectories(self):
         """Sample trajectories from the fine model using env."""
-        original_base = self.env.base_model
-        self.env.base_model = self.fine_model
-        with _memoryless_noise(self.env.scheduler):
-            env_sample = self.env.sample(self.config.batch_size, pbar=False)
-        self.env.base_model = original_base
+        original_policy = self.env._policy
+        self.env.policy = self.fine_model
+        try:
+            with _memoryless_noise(self.env.scheduler):
+                env_sample = self.env.sample(self.config.batch_size, pbar=False)
+        finally:
+            self.env._policy = original_policy
         return env_sample
 
     def generate_dataset(self):

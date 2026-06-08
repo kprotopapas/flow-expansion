@@ -1,4 +1,4 @@
-"""1D trimodal GMM base model: large central mode at 0, smaller modes at ±1."""
+"""1D trimodal GMM base model: sharp dominant mode at 0, small modes at ±1."""
 
 import math
 from typing import Any, Optional
@@ -29,15 +29,15 @@ class SigmoidalReward(Constraint[DDTensor]):
         )
         sigmoid = torch.sigmoid((sample.data - loc) / scale)
         result: torch.Tensor = sigmoid.to(torch.float32).squeeze()
-        return result, 1.0 * (result > loc).squeeze()
+        return result, 1.0 * (result > 0.5).squeeze()
 
 
 @base_model_registry.register("1d/trimodal_gmm")
 class TrimodalGMMBaseModel(BaseModel[DDTensor]):
     """1D flow matching model trained on a trimodal GMM.
 
-    Mixture: large mode N(0, 0.4) with weight 0.6, two smaller modes
-    N(±1, 0.2) each with weight 0.2.
+    Mixture: sharp dominant mode N(0, 0.2) with weight 0.8, two small modes
+    N(±1, 0.1) each with weight 0.1.
     """
 
     output_type = "velocity"
@@ -58,12 +58,12 @@ class TrimodalGMMBaseModel(BaseModel[DDTensor]):
             scheduler = OptimalTransportScheduler()
         self._scheduler = scheduler
 
-        # Trimodal GMM: weight 0.6 at 0, weight 0.2 each at ±1
+        # Trimodal GMM: weight 0.8 at 0, weight 0.1 each at ±1
         p1 = dist.MixtureSameFamily(
-            dist.Categorical(torch.tensor([0.6, 0.2, 0.2])),
+            dist.Categorical(torch.tensor([0.8, 0.1, 0.1])),
             dist.Normal(
                 torch.tensor([0.0, 1.0, -1.0]),
-                torch.tensor([0.4, 0.2, 0.2]),
+                torch.tensor([0.2, 0.1, 0.1]),
             ),
         )
         data = [DDTensor(p1.sample((4096, 1)).to(device))]

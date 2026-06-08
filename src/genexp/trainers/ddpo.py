@@ -169,9 +169,14 @@ class DDPOTrainer:
     def sample_trajectories(self) -> Sample:
         """Sample one batch of trajectories using the fine model as policy."""
         original_policy = self.env._policy
+        original_base = self.env.base_model
         self.env.policy = self.fine_model
-        env_sample = self.env.sample(self.config.batch_size, pbar=False)
-        self.env._policy = original_policy
+        self.env.base_model = self.fine_model
+        try:
+            env_sample = self.env.sample(self.config.batch_size, pbar=False)
+        finally:
+            self.env._policy = original_policy
+            self.env.base_model = original_base
         return env_sample
 
     def generate_dataset(self) -> Optional[ConcatDataset]:
