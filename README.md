@@ -1,5 +1,6 @@
 # Verifier-Constrained Flow Expansion for Discovery Beyond the Data
 
+<img src="assets/expansion.png" align="right" width="320"/>
 
 [![arXiv](http://img.shields.io/badge/arxiv-2602.15984-red?logo=arxiv)](https://arxiv.org/abs/2602.15984)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Komod0D/flow-expansion/blob/main/tutorial.ipynb)
@@ -28,7 +29,7 @@ Flow Expansion is built on top of [diffusiongym](https://github.com/cristianpjen
 
 1. A **data type** (e.g. `DDTensor` for plain tensors, or a custom `DDMixin` subclass for structured data)
 2. A **base model** (`BaseModel[D]`) wrapping your pre-trained network
-3. A **reward** (`Reward[D]`) measuring sample quality
+3. A **constraint** (`Constraint[D]`) measuring sample validity
 
 diffusiongym then handles environment construction, SDE simulation, and trajectory storage. `FlowExpansionTrainer` runs the optimization loop on top.
 
