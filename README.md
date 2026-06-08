@@ -3,7 +3,7 @@
 <img src="assets/expansion.png" align="right" width="320"/>
 
 [![arXiv](http://img.shields.io/badge/arxiv-2602.15984-red?logo=arxiv)](https://arxiv.org/abs/2602.15984)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Komod0D/flow-expansion/blob/main/tutorial.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/kprotopapas/flow-expansion/blob/main/tutorial.ipynb)
 
 This repository contains the official implementation of the Flow Expansion algorithm, a method for verifier-constrained exploration for discovery beyond the data.
 
